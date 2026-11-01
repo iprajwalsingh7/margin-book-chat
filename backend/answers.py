@@ -6,7 +6,7 @@ import re
 from dotenv import dotenv_values
 from pydantic import BaseModel, Field, ValidationError
 
-from backend.retrieval import sources_for
+from backend.retrieval import sources_for, is_overview_question
 
 ROOT = Path(__file__).resolve().parents[1]
 NO_EVIDENCE = 'I could not find enough supporting evidence in this book to answer that question.'
@@ -91,8 +91,20 @@ If the passages do not answer the question, set supported=false and statements=[
 Otherwise produce at most six short factual statements. Every statement must be fully supported
 by its cited passages. Include an exact verbatim quote (12-600 characters) and the supplied
 chunk_id for every citation. Do not invent IDs, quotations, page numbers, or citation markers.
-OCR passages may contain errors. Do not silently invent missing words.
-A few retrieved passages cannot establish a whole-book summary; decline those requests.'''
+OCR passages may contain errors. Do not silently invent missing words.'''
+    overview = is_overview_question(question)
+    if overview:
+        instructions += '''
+This is a book-overview request. The passages were specifically selected from opening material,
+introduction/contents when available, and locations distributed across the book.
+Give a concise overview of the book's subject, purpose, audience and major themes when supported.
+Synthesize across these sources instead of looking for one sentence that states the full overview.
+Do not decline merely because the question asks what the book is about.
+Describe this as an overview based on selected passages; do not claim exhaustive chapter coverage.
+Every statement still needs a supporting exact quote. If the material genuinely does not establish
+the book's subject, return supported=false. Never infer its topic only from the filename.'''
+    else:
+        instructions += '\nAnswer the focused question from these retrieved passages; do not claim exhaustive book coverage.'
     import json
     contents = json.dumps({'question': question, 'passages': sources_for(chunks)}, ensure_ascii=False)
     try:
@@ -115,4 +127,6 @@ A few retrieved passages cannot establish a whole-book summary; decline those re
         raise RagError('Gemini did not return a complete, valid answer. Please try a narrower question.', 502) from None
     except Exception:
         raise RagError('Could not reach Gemini. Check your connection and try again.', 502) from None
-    return verify_answer(payload, chunks)
+    result = verify_answer(payload, chunks)
+    result['mode'] = 'overview' if overview else 'focused'
+    return result

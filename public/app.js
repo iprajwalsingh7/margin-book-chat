@@ -188,7 +188,7 @@ function displayResult(result, searchOnly) {
   answerPanel.replaceChildren();
   answerPanel.hidden = false;
   const title = document.createElement('h3');
-  title.textContent = searchOnly ? 'Matching passages / local search' : 'Answer / Gemini';
+  title.textContent = searchOnly ? 'Matching passages / local search' : result.mode === 'overview' ? 'Book overview / Gemini' : 'Answer / Gemini';
   const answer = document.createElement('p');
   answer.textContent = searchOnly
     ? (result.sources.length ? 'These are retrieved passages, not a generated answer. Expand a source to inspect it.' : 'No sufficiently relevant passages found. Try a more specific question.')

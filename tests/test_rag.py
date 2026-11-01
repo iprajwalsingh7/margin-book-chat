@@ -136,3 +136,59 @@ def test_ask_flow_with_test_provider_and_question_validation(monkeypatch):
         assert result.json()['sources'][0]['source'] == 'forest.txt'
         assert 'fake-test-key' not in result.text
         assert client.post(f'/api/books/{book_id}/ask', json={'question': 'Another question?'}).status_code == 429
+
+@pytest.mark.parametrize('question', [
+    'What is this book about?', 'what is the book all about',
+    'Summarize the whole book', 'Give me an overview of this document',
+    'What are the main themes in this book?', 'What does this book cover?',
+])
+def test_overview_intent(question):
+    from backend.retrieval import is_overview_question
+    assert is_overview_question(question)
+
+
+@pytest.mark.parametrize('question', ['What is system design?', 'Summarize chapter 3', 'What does the author say about caching?'])
+def test_focused_questions_do_not_use_overview(question):
+    from backend.retrieval import is_overview_question
+    assert not is_overview_question(question)
+
+
+def test_overview_retrieval_covers_front_matter_and_later_pages():
+    chunks = chunk_sections([
+        {'page': i, 'label': f'Page {i}', 'text': ('Introduction: This book teaches software architecture and system design.' if i == 3 else f'Chapter material on page {i}. ' * 10)}
+        for i in range(1, 101)
+    ], 'book.pdf')
+    # No vectors needed: broad questions must not depend on matching their vague wording.
+    sources = retrieve({'chunks': chunks}, 'What is this book about?')
+    pages = {source['page'] for source in sources}
+    assert 3 in pages
+    assert 100 in pages
+    assert any(40 <= page <= 70 for page in pages)
+    assert len(sources) <= 18
+    assert len({c['id'] for c in sources}) == len(sources)
+    assert all('overviewRole' in c for c in sources)
+
+
+def test_overview_samples_long_text_documents():
+    from backend.retrieval import retrieve_overview
+    chunks = chunk_sections([{'section': 1, 'label': 'Text', 'text': 'A book passage. ' * 5000}], 'book.txt')
+    sources = retrieve_overview({'chunks': chunks})
+    assert sources[-1]['start'] > 0
+    assert any(c['id'] == chunks[-1]['id'] for c in sources)
+    assert len(sources) <= 18
+
+
+def test_overview_api_routes_to_distributed_context(monkeypatch):
+    monkeypatch.setattr(answers, 'settings', lambda: ('fake-test-key', 'test-model'))
+    async def fake_generate(question, chunks):
+        assert any('overviewRole' in c for c in chunks)
+        return {**answers.verify_answer(answers.AnswerPayload(supported=True, statements=[{'text': 'The book teaches software architecture.', 'citations': [{'chunk_id': chunks[0]['id'], 'quote': 'This book teaches software architecture'}]}]), chunks), 'mode': 'overview'}
+    monkeypatch.setattr(answers, 'generate_answer', fake_generate)
+    with TestClient(create_app(), base_url='http://127.0.0.1:3000') as client:
+        book_id = upload(client, 'guide.txt', b'This book teaches software architecture and system design interviews.').json()['id']
+        assert wait_for_book(client, book_id)['stage'] == 'ready'
+        result = client.post(f'/api/books/{book_id}/ask', json={'question': 'What is this book about?'})
+        assert result.status_code == 200
+        assert result.json()['supported']
+        assert result.json()['mode'] == 'overview'
+        assert result.json()['sources'][0]['source'] == 'guide.txt'
