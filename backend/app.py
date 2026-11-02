@@ -1,5 +1,6 @@
 """Local FastAPI server for the Margin book workspace."""
 import asyncio
+import json
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 import multiprocessing as mp
@@ -10,11 +11,11 @@ import time
 from urllib.parse import unquote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from backend.ingestion import MAX_BYTES, extraction_worker
-from backend import answers, retrieval
+from backend import answers, retrieval, conversation
 
 PUBLIC = Path(__file__).resolve().parents[1] / 'public'
 TTL = 3600
@@ -32,6 +33,10 @@ class Question(BaseModel):
         return value
 
 
+class ChatQuestion(Question):
+    retryTurnId: str | None = Field(default=None, max_length=64)
+
+
 @dataclass
 class Job:
     id: str
@@ -47,6 +52,8 @@ class Job:
     touched: float = field(default_factory=time.monotonic)
     answering: bool = False
     last_answer: float = 0
+    turns: list = field(default_factory=list)
+    stream_cancel: asyncio.Event | None = None
 
 
 def create_app():
@@ -58,6 +65,8 @@ def create_app():
         job = jobs.pop(job_id, None)
         if not job:
             return
+        if job.stream_cancel:
+            job.stream_cancel.set()
         if job.task:
             job.task.cancel()
             with suppress(asyncio.CancelledError):
@@ -91,7 +100,7 @@ def create_app():
         for job_id in list(jobs):
             await dispose(job_id)
 
-    app = FastAPI(title='Margin — book intelligence', version='0.3.0', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title='Margin — book intelligence', version='0.4.0', lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware('http')
     async def session_and_headers(request, call_next):
@@ -223,6 +232,119 @@ def create_app():
     async def configuration():
         key, model = answers.settings()
         return {'geminiConfigured': bool(key), 'model': model, 'embeddingModel': retrieval.MODEL_NAME}
+
+    def owned_job(job_id, request):
+        job = jobs.get(job_id)
+        return job if job and job.owner == request.state.session else None
+
+    @app.get('/api/books/{job_id}/chat/history')
+    async def chat_history(job_id: str, request: Request):
+        job = owned_job(job_id, request)
+        if not job:
+            return JSONResponse({'error': 'Book not found or session expired.'}, 404)
+        job.touched = time.monotonic()
+        return {'turns': job.turns}
+
+    @app.post('/api/books/{job_id}/chat/cancel')
+    async def cancel_chat(job_id: str, request: Request):
+        job = owned_job(job_id, request)
+        if not job:
+            return JSONResponse({'error': 'Book not found or session expired.'}, 404)
+        if job.stream_cancel:
+            job.stream_cancel.set()
+        return {'stopping': bool(job.stream_cancel)}
+
+    @app.post('/api/books/{job_id}/chat/clear')
+    async def clear_chat(job_id: str, request: Request):
+        job = owned_job(job_id, request)
+        if not job:
+            return JSONResponse({'error': 'Book not found or session expired.'}, 404)
+        if job.answering:
+            return JSONResponse({'error': 'Stop the current response before clearing the conversation.'}, 409)
+        job.turns.clear()
+        return {'cleared': True}
+
+    @app.post('/api/books/{job_id}/chat/stream')
+    async def stream_chat(job_id: str, body: ChatQuestion, request: Request):
+        job = owned_job(job_id, request)
+        if not job:
+            return JSONResponse({'error': 'Book not found or session expired.'}, 404)
+        if job.stage != 'ready' or not job.book:
+            return JSONResponse({'error': 'Wait until indexing finishes.'}, 409)
+        if job.answering:
+            return JSONResponse({'error': 'Another question is already running for this book.'}, 429)
+        if time.monotonic() - job.last_answer < 5:
+            return JSONResponse({'error': 'Wait a few seconds before asking again.'}, 429)
+        if not answers.settings()[0]:
+            return JSONResponse({'error': 'Add GEMINI_API_KEY to .env to enable answers.'}, 503)
+        if body.retryTurnId:
+            if not job.turns or job.turns[-1]['id'] != body.retryTurnId or job.turns[-1]['status'] not in {'failed', 'stopped'}:
+                return JSONResponse({'error': 'Only the most recent failed or stopped response can be retried.'}, 409)
+            turn = job.turns[-1]
+            turn.update(status='running', error=None)
+        else:
+            turn = {'id': secrets.token_urlsafe(18), 'question': body.question, 'status': 'running'}
+            job.turns.append(turn)
+            del job.turns[:-40]
+        job.answering = True
+        job.touched = time.monotonic()
+        cancel_event = asyncio.Event()
+        job.stream_cancel = cancel_event
+
+        async def events():
+            iterator, pending, cancel_wait = None, None, None
+            try:
+                yield json.dumps({'event': 'started', 'turn': turn}) + '\n'
+                chunks = await asyncio.to_thread(conversation.retrieve_for_turn, job.book, turn['question'], job.turns[:-1])
+                if cancel_event.is_set():
+                    turn['status'] = 'stopped'
+                    yield json.dumps({'event': 'stopped', 'turnId': turn['id']}) + '\n'
+                    return
+                job.last_answer = time.monotonic()
+                yield json.dumps({'event': 'status', 'text': 'Writing a draft; citations will be checked when complete.'}) + '\n'
+                iterator = answers.stream_answer(turn['question'], chunks, conversation.completed_context(job.turns[:-1]))
+                cancel_wait = asyncio.create_task(cancel_event.wait())
+                while True:
+                    pending = asyncio.create_task(anext(iterator))
+                    done, _ = await asyncio.wait({pending, cancel_wait}, timeout=60, return_when=asyncio.FIRST_COMPLETED)
+                    if cancel_wait in done:
+                        turn['status'] = 'stopped'
+                        yield json.dumps({'event': 'stopped', 'turnId': turn['id']}) + '\n'
+                        return
+                    if not done:
+                        raise answers.RagError('The response stalled. Please retry.', 504)
+                    try:
+                        message = pending.result()
+                    except StopAsyncIteration:
+                        raise answers.RagError('The response ended before verification. Please retry.') from None
+                    if message['event'] == 'final':
+                        turn.update(status='complete', result=message['result'])
+                        yield json.dumps({**message, 'turnId': turn['id']}, ensure_ascii=False) + '\n'
+                        return
+                    yield json.dumps(message, ensure_ascii=False) + '\n'
+            except asyncio.CancelledError:
+                turn['status'] = 'stopped'
+                raise
+            except Exception as exc:
+                message = str(exc) if isinstance(exc, answers.RagError) else 'The response failed. Please retry.'
+                turn.update(status='failed', error=message)
+                yield json.dumps({'event': 'error', 'error': message, 'turnId': turn['id']}) + '\n'
+            finally:
+                for task in (pending, cancel_wait):
+                    if task and not task.done():
+                        task.cancel()
+                    if task:
+                        with suppress(asyncio.CancelledError, Exception):
+                            await task
+                if iterator:
+                    with suppress(Exception):
+                        await iterator.aclose()
+                if turn['status'] == 'running':
+                    turn['status'] = 'stopped'
+                job.stream_cancel = None
+                job.answering = False
+
+        return StreamingResponse(events(), media_type='application/x-ndjson', headers={'X-Accel-Buffering': 'no'})
 
     @app.post('/api/books/{job_id}/{action}')
     async def question(job_id: str, action: str, body: Question, request: Request):
