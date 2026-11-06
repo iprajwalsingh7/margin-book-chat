@@ -36,6 +36,7 @@ function updateComposer() {
   stopButton.hidden = !busy;
   clearChatButton.disabled = !bookReady || busy;
   retryAnswerButton.disabled = !bookReady || busy;
+  document.querySelectorAll('[data-question]').forEach(button => { button.disabled = !bookReady || busy; });
 }
 function resetQuestions() {
   activeController?.abort();
@@ -57,8 +58,9 @@ async function checkProvider() {
   try {
     const config = await api('/api/config');
     providerConfigured = config.geminiConfigured;
+    document.querySelector('#settings').open = !providerConfigured;
     document.querySelector('#model-status').textContent = providerConfigured
-      ? `Gemini key configured · ${config.model} · local passage search available`
+      ? 'Gemini key is configured. You can ask questions or search passages without AI.'
       : 'Gemini key needed: add GEMINI_API_KEY to .env. Local passage search is available without a key.';
     updateComposer();
   } catch {
@@ -78,12 +80,13 @@ async function removeRemote(id) {
   if (!response.ok && response.status !== 404) throw new Error('Could not remove the previous book. Try again.');
 }
 function setStage(stage, message, percent) {
-  badge.textContent = stage;
-  detail.textContent = message;
+  badge.textContent = stage === 'Text ready' ? 'Ready to chat' : stage;
+  badge.dataset.ready = stage === 'Text ready' ? 'true' : 'false';
+  detail.textContent = stage === 'Text ready' ? 'Ready when you are.' : message;
   if (percent === null) progress.removeAttribute('value');
   else progress.value = percent;
-  document.querySelector('#source-eyebrow').textContent = stage === 'Text ready' ? 'SOURCE MATERIAL PREPARED' : 'SOURCE PROCESSING';
-  document.querySelector('#source-heading').textContent = stage === 'Text ready' ? 'Your evidence is ready.' : 'Preparing your source.';
+  document.querySelector('#source-eyebrow').textContent = stage === 'Text ready' ? 'READY WHEN YOU ARE' : 'ONE MOMENT';
+  document.querySelector('#source-heading').textContent = stage === 'Text ready' ? 'Your book is ready.' : 'Getting your book ready…';
 }
 function showFailure(message) {
   bookReady = false;
@@ -110,7 +113,7 @@ function renderBook(book) {
   }
   updateComposer();
   checkProvider();
-  status.textContent = `${book.chunkCount.toLocaleString()} ${book.chunkCount === 1 ? 'passage' : 'passages'} indexed locally. Ask a focused question or find supporting passages.`;
+  status.textContent = 'Ask a question, or start with one of these.';
   const unit = book.format === 'pdf' ? 'page' : 'section';
   document.querySelector('#extraction-stats').textContent = `${book.sectionCount.toLocaleString()} ${unit}${book.sectionCount === 1 ? '' : 's'} · ${book.characters.toLocaleString()} characters · ${book.chunkCount.toLocaleString()} ${book.chunkCount === 1 ? 'passage' : 'passages'}${book.ocrPageCount ? ` · ${book.ocrPageCount} OCR page(s)` : ''}`;
   document.querySelector('#extraction-warnings').textContent = book.warnings.join(' ');
@@ -162,7 +165,7 @@ async function selectBook(file) {
   document.querySelector('#book-name').textContent = file.name;
   document.querySelector('#book-size').textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB · ${file.name.split('.').pop().toUpperCase()}`;
   setStage('Uploading', 'Sending to your local processing server…', null);
-  status.textContent = 'Preparing your source material. You can inspect the extracted passages when processing finishes.';
+  status.textContent = 'Reading your book. This can take a little longer for scanned pages.';
   try {
     await removeRemote(previousId);
     if (token !== revision) return;
@@ -197,11 +200,11 @@ document.querySelector('#remove-book').addEventListener('click', async () => {
   selected.hidden = true;
   preview.hidden = true;
   error.textContent = '';
-  status.textContent = 'Select a book to prepare your research workspace.';
+  status.textContent = 'Upload a book, then ask a question.';
   progress.value = 0;
   detail.textContent = 'Ready for a source document';
-  document.querySelector('#source-eyebrow').textContent = 'AWAITING SOURCE MATERIAL';
-  document.querySelector('#source-heading').textContent = 'Start with a source.';
+  document.querySelector('#source-eyebrow').textContent = 'A NEW WAY TO READ';
+  document.querySelector('#source-heading').textContent = 'What’s on your mind?';
   input.focus();
   try { await removeRemote(id); } catch { error.textContent = 'Could not confirm server deletion. Temporary data expires after one hour.'; }
 });
@@ -210,7 +213,7 @@ function displayResult(result, searchOnly, target = answerPanel) {
   target.replaceChildren();
   target.hidden = false;
   const title = document.createElement('h3');
-  title.textContent = searchOnly ? 'Matching passages / local search' : result.mode === 'overview' ? 'Book overview / Gemini' : 'Answer / Gemini';
+  title.textContent = searchOnly ? 'From your book' : result.mode === 'overview' ? 'About this book' : 'Answer';
   const answer = document.createElement('p');
   answer.textContent = searchOnly
     ? (result.sources.length ? 'These are retrieved passages, not a generated answer. Expand a source to inspect it.' : 'No sufficiently relevant passages found. Try a more specific question.')
@@ -223,7 +226,7 @@ function displayResult(result, searchOnly, target = answerPanel) {
     const quote = document.createElement('blockquote');
     quote.textContent = source.quotes ? source.quotes.join('\n\n') : source.text;
     const metadata = document.createElement('p');
-    metadata.textContent = `${source.id} · ${source.extraction === 'ocr' ? 'Recognized from a scan; verify against the page.' : 'Extracted from your book.'}`;
+    metadata.textContent = source.extraction === 'ocr' ? 'Read from a scanned page. Check the original if something looks wrong.' : 'From your uploaded book.';
     item.append(summary, quote, metadata);
     target.append(item);
   }
@@ -251,7 +254,7 @@ function turnView(turn) {
 function renderStoredTurn(turn) {
   const view = turnView(turn);
   if (turn.status === 'complete') {
-    view.badge.textContent = turn.result.supported ? 'Complete · source quotations checked' : 'Complete · insufficient supporting evidence';
+    view.badge.textContent = turn.result.supported ? 'Sources included' : 'Not enough information in the book';
     displayResult(turn.result, false, view.body);
   } else {
     view.badge.textContent = turn.status === 'running' ? 'Response in progress…' : turn.status === 'stopped' ? 'Stopped · incomplete draft discarded' : 'Response failed';
@@ -318,16 +321,16 @@ async function submitQuestion(searchOnly = false, retryTurnId = null) {
         activeTurnId = message.turn.id;
         view = turnView(message.turn);
         view.body.replaceChildren();
-        view.badge.textContent = 'Draft streaming · not yet verified';
+        view.badge.textContent = 'Writing…';
         questionInput.value = '';
       } else if (message.event === 'status') {
         questionProgress.textContent = message.text;
       } else if (message.event === 'draft' && view) {
         view.body.textContent = message.text;
-        view.badge.textContent = 'Draft · citations not yet verified';
+        view.badge.textContent = 'Writing · checking sources when finished';
       } else if (message.event === 'final' && view) {
         terminal = true;
-        view.badge.textContent = message.result.supported ? 'Complete · source quotations checked' : 'Complete · insufficient supporting evidence';
+        view.badge.textContent = message.result.supported ? 'Sources included' : 'Not enough information in the book';
         displayResult(message.result, false, view.body);
         questionProgress.textContent = 'Answer complete. You can ask a follow-up.';
       } else if (message.event === 'error' || message.event === 'stopped') {
@@ -391,6 +394,12 @@ clearChatButton.addEventListener('click', async () => {
   } catch (err) { questionProgress.textContent = err.message; }
 });
 askButton.addEventListener('click', () => submitQuestion(false));
+document.querySelectorAll('[data-question]').forEach(button => {
+  button.addEventListener('click', () => {
+    questionInput.value = button.dataset.question;
+    questionInput.focus();
+  });
+});
 searchButton.addEventListener('click', () => submitQuestion(true));
 questionInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey) {

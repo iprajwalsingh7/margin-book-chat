@@ -3,34 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Read deeper. Ask questions about your books and explore answers with sources.">
-  <title>Margin · A conversation with your book</title>
+  <meta name="description" content="Upload a book, ask questions and explore answers with sources.">
+  <title>Margin · Chat with your book</title>
   <link rel="stylesheet" href="/styles.css">
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header><a class="brand" href="/">⌁<span>margin</span></a><span class="build-badge">Layer 04 / Conversation</span></header>
-  <main>
-    <section class="intro"><p class="eyebrow">BOOK INTELLIGENCE / WORKSPACE 01</p><h1>Your book.<br>Under interrogation.</h1><p>Trace ideas. Challenge arguments. Find the evidence.<br>A research workspace built around your source material.</p></section>
-    <div class="workspace">
-      <aside class="library" aria-labelledby="library-title"><div class="section-heading"><h2 id="library-title">Source library</h2><span>01 BOOK</span></div>
-        <label class="dropzone" id="dropzone" for="book-input"><span class="book-icon" aria-hidden="true">▤</span><strong>Add a source document</strong><span>Drop it here, or choose a file</span><span class="file-types">PDF, EPUB or TXT · up to 25 MB</span><input id="book-input" type="file" accept=".pdf,.epub,.txt"></label>
-        <p class="ocr-note">Scanned PDF? Local OCR runs automatically on image pages with little or no text.</p><p id="file-error" class="error" role="alert"></p>
-        <div id="selected-book" class="selected-book" hidden><span class="cover" aria-hidden="true">m</span><div><strong id="book-name"></strong><p id="book-size"></p><span id="book-state" class="pending">Awaiting processing</span></div><button id="remove-book" class="remove" aria-label="Remove selected book">×</button></div>
-        <div class="processing" aria-live="polite"><progress id="processing-progress" max="100" value="0" aria-label="Book processing"></progress><p id="processing-detail">Ready for a source document</p><button id="retry-book" hidden>Retry upload</button></div><p class="privacy">Processed on this local server. Temporary text expires after one hour of inactivity or a server restart. Embeddings stay local. Ask Gemini sends your question, recent completed conversation and selected passages to Google.</p>
-        <div class="roadmap"><p class="eyebrow">BUILT ONE LAYER AT A TIME</p><ol><li>Foundation &amp; book selection<span>Complete</span></li><li>Text extraction, OCR &amp; chunking<span>Complete</span></li><li>Grounded answers &amp; citations<span>Complete</span></li><li class="current">Streaming &amp; conversation<span>Complete</span></li><li>Persistence & access controls</li></ol></div>
-      </aside>
-      <section class="conversation" aria-labelledby="chat-title"><div class="chat-header"><div><span class="status-dot"></span><h2 id="chat-title">Research console</h2></div><span>SOURCE-GROUNDED Q&A</span></div>
-        <div class="empty-state"><span class="spark" aria-hidden="true">⌘</span><p id="source-eyebrow" class="eyebrow">AWAITING SOURCE MATERIAL</p><h3 id="source-heading">Start with a source.</h3><p id="chat-status" aria-live="polite">Select a book to prepare your research workspace.</p><div class="prompts"><span>“What is the central argument?”</span><span>“Explain this chapter simply.”</span><span>“Where does the author discuss…?”</span></div></div>
-        <section id="extraction-preview" class="extraction-preview" aria-labelledby="preview-title" hidden><h3 id="preview-title">Extracted source / preview</h3><p id="extraction-stats"></p><p id="extraction-warnings" role="status"></p><div id="passage-list"></div></section><section id="answer-panel" class="answer-panel" aria-live="polite" hidden></section><p id="model-status" class="model-status">Checking Gemini configuration…</p><div class="composer"><label class="sr-only" for="question">Ask about your book</label><textarea id="question" disabled placeholder="Ask a focused question about this book…" maxlength="2000" rows="1"></textarea><button id="ask-question" disabled aria-label="Ask Gemini">↑</button></div><div class="question-actions"><button id="search-passages" disabled>Find passages locally</button><button id="stop-answer" hidden>Stop response</button><button id="retry-answer" hidden>Retry last response</button><button id="clear-chat" disabled>Clear chat</button><span id="question-progress" role="status"></span></div><p class="citation-note">Drafts stream before citation verification. Completed answers include checked source quotations. Recent completed turns provide follow-up context.</p>
-      </section>
-    </div>
-    <footer><span>MARGIN / EVIDENCE BEFORE ANSWERS</span><span>LOCAL DEVELOPMENT · v0.4</span></footer>
+  <header class="app-header"><a class="brand" href="/" aria-label="Margin home"><span class="brand-mark" aria-hidden="true">m</span>Margin</a><span class="header-note">A little more from every book.</span><details id="settings" class="settings"><summary>Settings</summary><div class="settings-panel"><h2>Connection &amp; privacy</h2><p id="model-status" role="status">Checking connection…</p><p>Book processing and search run on this server. Gemini receives your question, recent conversation and selected passages when you ask for an answer.</p><p>Books and chats are temporary and clear when the server restarts.</p></div></details></header>
+  <main class="workspace">
+    <aside class="library" aria-labelledby="library-title">
+      <div class="section-heading"><h2 id="library-title">Your book</h2></div>
+      <label class="dropzone" id="dropzone" for="book-input"><span class="upload-icon" aria-hidden="true">↑</span><strong>Upload a book</strong><span>Choose a file or drop it here</span><span class="file-types">PDF, EPUB or TXT · max 25 MB</span><input id="book-input" type="file" accept=".pdf,.epub,.txt"></label>
+      <p id="file-error" class="error" role="alert"></p>
+      <div id="selected-book" class="selected-book" hidden><span class="cover" aria-hidden="true">▤</span><div><strong id="book-name"></strong><p id="book-size"></p><span id="book-state" class="pending">Preparing</span></div><button id="remove-book" class="remove" aria-label="Remove selected book" title="Remove book">×</button></div>
+      <div class="processing" aria-live="polite"><progress id="processing-progress" max="100" value="0" aria-label="Book processing"></progress><p id="processing-detail">Your book will appear here.</p><button id="retry-book" hidden>Try upload again</button></div>
+      <details class="book-details"><summary>Book details</summary><section id="extraction-preview" class="extraction-preview" aria-labelledby="preview-title" hidden><h3 id="preview-title">What we read</h3><p id="extraction-stats"></p><p id="extraction-warnings" role="status"></p><div id="passage-list"></div></section><p class="details-hint">Scanned PDFs are read automatically. You can inspect the extracted text here after uploading.</p></details>
+      <div class="sidebar-bottom"><span class="small-book" aria-hidden="true">▥</span><p>Start with a question.<br>Follow it somewhere interesting.</p></div>
+    </aside>
+    <section class="conversation" aria-labelledby="chat-title">
+      <div class="chat-header"><h1 id="chat-title">Book chat</h1><button id="clear-chat" disabled>New chat <span aria-hidden="true">↗</span></button></div>
+      <div class="reading-area">
+        <div class="empty-state"><span class="book-symbol" aria-hidden="true">▤</span><p id="source-eyebrow" class="eyebrow">A NEW WAY TO READ</p><h2 id="source-heading">What’s on your mind?</h2><p id="chat-status" aria-live="polite">Upload a book, then ask it anything.<br>We’ll help you find the answer—and the page.</p><div class="prompts"><button data-question="What is this book about?" disabled>What is this book about? <span aria-hidden="true">↗</span></button><button data-question="What does this book cover?" disabled>Explore the main topics <span aria-hidden="true">↗</span></button><button data-question="Who is this book for?" disabled>Who should read this? <span aria-hidden="true">↗</span></button></div></div>
+        <section id="answer-panel" class="answer-panel" aria-label="Conversation" aria-live="polite" hidden></section>
+      </div>
+      <div class="input-area"><div class="composer"><label class="sr-only" for="question">Ask about your book</label><textarea id="question" disabled placeholder="Ask a question about your book…" maxlength="2000" rows="2"></textarea><button id="ask-question" disabled aria-label="Ask Gemini" title="Send question">↑</button></div><div class="question-actions"><details class="more-actions"><summary>More options</summary><button id="search-passages" disabled>Search passages without AI</button></details><button id="stop-answer" hidden>Stop response</button><button id="retry-answer" hidden>Retry response</button><span id="question-progress" role="status"></span></div><p class="citation-note">Answers use Gemini and include sources. Check important details.</p></div>
+    </section>
   </main>
 </body>
 </html>
-
-
-
-
-

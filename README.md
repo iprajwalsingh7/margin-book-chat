@@ -17,7 +17,7 @@ Dependencies are declared in `pyproject.toml` and resolved in `uv.lock`. Use `uv
 
 ## Layer 1 — foundation
 
-A responsive dark research workspace with electric blue accents, a source library, drag-and-drop file selection, validation and a disabled question composer.
+A responsive reading interface with a white surface, charcoal text and restrained violet accents. The main flow is upload a book, ask a question, and expand its sources. Book extraction details, connection settings and local passage search live in expandable secondary controls. Suggested questions fill the composer with one click.
 
 ## Layer 2 — ingestion
 
